@@ -5,24 +5,31 @@ extern crate test;
 use core::str::Bytes;
 
 fn main() {
-    println!("18446744073709551615: {}", fast_parse_int("18446744073709551615").unwrap());
+    println!(
+        "18446744073709551615: {}",
+        fast_parse_int("18446744073709551615").unwrap()
+    );
 }
-
-const MAX_BEFORE_MULT: i64 = i64::MAX / 10 - 9;
 
 /// This is around 2x faster than using `str::parse::<i64>()`
 pub fn fast_parse_int(s: &str) -> Option<i64> {
     _fast_parse_int(s.bytes())
 }
 
-/// This is around 2x faster than using `str::parse::<i64>()`
-pub fn _fast_parse_int(mut bytes: Bytes) -> Option<i64> {
+pub fn b_fast_parse_int(s: &[u8]) -> Option<i64> {
+    _fast_parse_int(s.iter().map(|&c| c))
+}
+
+pub fn _fast_parse_int<I: Iterator>(mut bytes: I) -> Option<i64>
+where
+    I: Iterator<Item = u8>,
+{
     let mut result: i64 = 0;
-    let sign: i64 = match bytes.next() {
-        Some(b'-') => -1,
+    let neg = match bytes.next() {
+        Some(b'-') => true,
         Some(c) if (b'0'..=b'9').contains(&c) => {
             result = (c & 0x0f) as i64;
-            1
+            false
         }
         _ => return None,
     };
@@ -30,26 +37,26 @@ pub fn _fast_parse_int(mut bytes: Bytes) -> Option<i64> {
     for digit in bytes {
         match digit {
             b'0'..=b'9' => {
-                if result > MAX_BEFORE_MULT {
-                    return None;
-                }
-                result *= 10;
-                result += (digit & 0x0f) as i64;
+                result = result.checked_mul(10)?;
+                result = result.checked_add((digit & 0x0f) as i64)?
             }
             _ => return None,
         }
     }
-    Some(sign * result)
+    if neg {
+        result = -result;
+    }
+    Some(result)
 }
 
 pub fn fast_parse_float(s: &str) -> Option<f64> {
     let mut bytes = s.bytes();
     let mut result_whole: i64 = 0;
-    let sign = match bytes.next() {
-        Some(b'-') => -1_f64,
+    let neg = match bytes.next() {
+        Some(b'-') => true,
         Some(c) if (b'0'..=b'9').contains(&c) => {
             result_whole = (c & 0x0f) as i64;
-            1_f64
+            false
         }
         _ => return None,
     };
@@ -63,11 +70,8 @@ pub fn fast_parse_float(s: &str) -> Option<f64> {
         };
         match digit {
             b'0'..=b'9' => {
-                if result_whole > MAX_BEFORE_MULT {
-                    return None;
-                }
-                result_whole *= 10;
-                result_whole += (digit & 0x0f) as i64;
+                result_whole = result_whole.checked_mul(10)?;
+                result_whole = result_whole.checked_add((digit & 0x0f) as i64)?;
             }
             b'.' => {
                 found_dot = true;
@@ -90,13 +94,16 @@ pub fn fast_parse_float(s: &str) -> Option<f64> {
             }
         }
     }
-    Some(sign * result)
+    if neg {
+        result = -result;
+    }
+    Some(result)
 }
 
 #[cfg(test)]
 mod tests {
-    use test::{Bencher, black_box};
-    use crate::{fast_parse_int, fast_parse_float};
+    use crate::{b_fast_parse_int, fast_parse_float, fast_parse_int};
+    use test::{black_box, Bencher};
 
     #[test]
     fn test_fast_parse_int() {
@@ -105,10 +112,23 @@ mod tests {
         assert_eq!(fast_parse_int("-1").unwrap(), -1);
         assert_eq!(fast_parse_int("123").unwrap(), 123);
         assert_eq!(fast_parse_int("-123").unwrap(), -123);
-        assert_eq!(fast_parse_int("1585201087123789").unwrap(), 1585201087123789);
-        assert_eq!(fast_parse_int("1234567890123456").unwrap(), 1234567890123456);
-        assert_eq!(fast_parse_int("1111111111111111").unwrap(), 1111111111111111);
-        assert_eq!(fast_parse_int(&(i64::MAX / 10 - 9 - 1).to_string()).unwrap(), 922337203685477570);
+        assert_eq!(fast_parse_int("1577836800").unwrap(), 1577836800);
+        assert_eq!(
+            fast_parse_int("1585201087123789").unwrap(),
+            1585201087123789
+        );
+        assert_eq!(
+            fast_parse_int("1234567890123456").unwrap(),
+            1234567890123456
+        );
+        assert_eq!(
+            fast_parse_int("1111111111111111").unwrap(),
+            1111111111111111
+        );
+        assert_eq!(
+            fast_parse_int(&(i64::MAX - 1).to_string()).unwrap(),
+            i64::MAX - 1
+        );
     }
 
     fn floats_equal(a: f64, b: f64) -> bool {
@@ -131,8 +151,14 @@ mod tests {
         assert!(floats_equal(fast_parse_float("1.5").unwrap(), 1.5_f64));
         assert!(floats_equal(fast_parse_float("1.5").unwrap(), 1.5_f64));
         assert!(floats_equal(fast_parse_float("-1.99").unwrap(), -1.99_f64));
-        assert!(floats_equal(fast_parse_float("-123.000123").unwrap(), -123.000123_f64));
-        assert!(floats_equal(fast_parse_float("158520108.7123789").unwrap(), 158520108.7123789_f64));
+        assert!(floats_equal(
+            fast_parse_float("-123.000123").unwrap(),
+            -123.000123_f64
+        ));
+        assert!(floats_equal(
+            fast_parse_float("158520108.7123789").unwrap(),
+            158520108.7123789_f64
+        ));
     }
 
     #[bench]
